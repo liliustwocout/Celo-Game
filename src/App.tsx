@@ -1,7 +1,15 @@
+h
+
 import React, { useEffect, useState } from "react";
 import { ethers } from "ethers";
 import GameInterface from "./components/GameInterface.tsx";
 import { NETWORK_PARAMS, TOKEN_ABI, ARENA_ABI } from "./celoConfig.ts";
+
+interface LeaderboardEntry {
+  address: string;
+  wins: number;
+  totalBets: number;
+}
 
 const App: React.FC = () => {
   const [account, setAccount] = useState<string>("");
@@ -11,6 +19,8 @@ const App: React.FC = () => {
   const [arenaContract, setArenaContract] = useState<ethers.Contract | null>(null);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isMinting, setIsMinting] = useState<boolean>(false);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+  const [isClaiming, setIsClaiming] = useState<boolean>(false);
 
   // Hàm kết nối ví
   const connectWallet = async () => {
@@ -43,10 +53,65 @@ const App: React.FC = () => {
     }
   };
 
+  // Hàm fetch leaderboard từ events
+  const fetchLeaderboard = async () => {
+    if (!arenaContract) return;
+    try {
+      const filter = arenaContract.filters.GameResult();
+      const events = await arenaContract.queryFilter(filter, 0, "latest");
+      const stats: { [key: string]: LeaderboardEntry } = {};
+      events.forEach((event) => {
+        if ('args' in event) {
+          const { player, won } = event.args;
+          const addr = player.toLowerCase();
+          if (!stats[addr]) {
+            stats[addr] = { address: addr, wins: 0, totalBets: 0 };
+          }
+          stats[addr].totalBets += 1;
+          if (won) stats[addr].wins += 1;
+        }
+      });
+      const sorted = Object.values(stats).sort((a, b) => b.wins - a.wins || b.totalBets - a.totalBets);
+      setLeaderboard(sorted.slice(0, 10)); // Top 10
+    } catch (err) {
+      console.error("Fetch leaderboard error", err);
+    }
+  };
+
+  // Hàm claim daily reward
+  const claimDailyReward = async () => {
+    const lastClaim = localStorage.getItem(`dailyClaim_${account}`);
+    const now = Date.now();
+    const oneDay = 24 * 60 * 60 * 1000;
+    if (lastClaim && now - parseInt(lastClaim) < oneDay) {
+      alert("Bạn đã claim reward hôm nay rồi!");
+      return;
+    }
+    try {
+      setIsClaiming(true);
+      // Simulate reward: add 5 tokens to balance (frontend only, since mint is owner-only)
+      const reward = 5;
+      const newBalance = parseFloat(tokenBalance) + reward;
+      setTokenBalance(newBalance.toString());
+      localStorage.setItem(`dailyClaim_${account}`, now.toString());
+      alert(`Đã claim ${reward} GAME tokens thành công!`);
+    } catch (err) {
+      console.error("Claim reward error", err);
+      alert("Có lỗi khi claim reward!");
+    } finally {
+      setIsClaiming(false);
+    }
+  };
+
   // Khởi tạo kết nối MetaMask tự động (optional)
   useEffect(() => {
     // Có thể bỏ qua auto-connect để user tự nhấn nút connect
   }, []);
+
+  // Fetch leaderboard on mount and after play
+  useEffect(() => {
+    fetchLeaderboard();
+  }, [arenaContract]);
 
   // Hàm cập nhật số dư token từ hợp đồng
   const updateBalance = async () => {
@@ -88,6 +153,8 @@ const App: React.FC = () => {
 
       // Cập nhật số dư
       await updateBalance();
+      // Refresh leaderboard after play
+      await fetchLeaderboard();
       alert("Chúc mừng! Bạn đã chơi xong.");
     } catch (err: any) {
       console.error("playGame error", err);
@@ -190,19 +257,20 @@ const App: React.FC = () => {
           <li>Lặp lại để kiếm thêm token!</li>
         </ol>
       </div>
-
       {/* Game Interface */}
       <GameInterface
         account={account}
-        tokenBalance={tokenBalance}
+
         onPlayGame={playGame}
         onMintTokens={mintTokens}
         onDisconnect={disconnectWallet}
         onConnectWallet={connectWallet}
         isPlaying={isPlaying}
         isMinting={isMinting}
+        leaderboard={leaderboard}
+        onClaimDailyReward={claimDailyReward}
+        isClaiming={isClaiming}
       />
-
       {/* Footer */}
       <footer style={{
         marginTop: "3rem",
